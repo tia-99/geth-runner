@@ -84,54 +84,6 @@ impl NodeInitializer {
     }
 
     // assumes self.node_count >= self.sealer_count
-    fn create_gesis(&self, accounts: &Vec<Address>) {
-        let mut dir = env::current_dir().unwrap();
-        dir.push(Path::new(".puppeth"));
-        let exist = dir.is_dir();
-
-        let mut puppeth = Command::new(&self.puppeth_dir)
-            .stdin(Stdio::piped())
-            // .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut pin = puppeth.stdin.take().unwrap();
-
-        pin.write_all(NETWORK.as_bytes()).unwrap();
-        pin.write_all(b"\n").unwrap();
-        if exist {
-            println!("Target network exisits, rewriting...");
-            pin.write_all(b"2\n3\n").unwrap();
-        }
-        pin.write_all(b"2\n1\n2\n\n").unwrap();
-
-        for i in 0..self.sealer_count {
-            pin.write_all(accounts[i].as_bytes()).unwrap();
-            pin.write_all(b"\n").unwrap();
-        }
-        pin.write_all(b"\n").unwrap();
-
-        for i in 0..self.node_count {
-            pin.write_all(accounts[i].as_bytes()).unwrap();
-            pin.write_all(b"\n").unwrap();
-        }
-        pin.write_all(b"\n").unwrap();
-
-        pin.write_all(b"\n").unwrap();
-        pin.write_all(b"\n").unwrap();
-
-        pin.write_all(b"2\n2\n").unwrap();
-        let genesis_path = self.data_dir.clone().into_os_string().into_string().unwrap();
-        pin.write_all(genesis_path.as_bytes()).unwrap();
-        pin.write_all(b"\n").unwrap();
-
-        // dirty hack: wait the child process to finish writing
-        // TODO: find a better way to do it
-        thread::sleep(time::Duration::from_secs(1));
-
-        puppeth.kill().unwrap();
-    }
-
-    // assumes self.node_count >= self.sealer_count
     fn create_genesis(&self, accounts: &Vec<Address>) {
         let mut dir = env::current_dir().unwrap();
         dir.push(Path::new(".puppeth"));
