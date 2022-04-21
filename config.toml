@@ -1,0 +1,14 @@
+[bin]
+geth_dir = "C:/Users/25412/go/src/github.com/ethereum/go-ethereum/out/go_build_github_com_ethereum_go_ethereum_cmd_geth2.exe"
+puppeth_dir = "C:/Users/25412/go/bin/puppeth.exe"
+
+[init]
+nodes_dir = "nodes"
+accounts_dir = "nodes/accounts.toml"
+node_count = 3
+sealer_count = 2
+
+[run]
+nodes_dir = "nodes"
+node_count = 3
+connection = [[1, 2], [0, 2], [0, 1]]
