@@ -1,17 +1,13 @@
-use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::io::prelude::*;
 use std::str::FromStr;
 use std::error::Error;
-use toml::Value;
 use std::fmt;
 use std::process::{Command, Stdio};
 use std::env;
-use std::{thread, time};
 
-use crate::utils::{self, Console, ConsoleInteractor};
-
-const NETWORK: &str = "auto_test";
+use crate::utils::{self, Console, ConsoleInteractor, node_dir};
+use crate::{Address, NETWORK, NETWORK_ID};
 
 struct InitError;
 
@@ -29,13 +25,11 @@ impl fmt::Debug for InitError {
 
 impl Error for InitError {}
 
-type Address = String;
-
 #[derive(Debug)]
 pub struct NodeInitializer {
     geth_dir:       PathBuf,
     puppeth_dir:    PathBuf,
-    data_dir:       PathBuf,
+    nodes_dir:       PathBuf,
     node_count:     usize,
     sealer_count:   usize,
     out:            PathBuf,
@@ -43,16 +37,13 @@ pub struct NodeInitializer {
 
 impl NodeInitializer {
     pub fn new_with_cfg_file(path: &Path) -> NodeInitializer {
-        let mut file = File::open(&path).unwrap();
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).unwrap();
-        let parsed = contents.parse::<Value>().unwrap();
+        let parsed = utils::read_toml(path);
         NodeInitializer {
             geth_dir:       PathBuf::from_str(parsed["bin"]["geth_dir"].as_str().unwrap()).unwrap(),
             puppeth_dir:    PathBuf::from_str(parsed["bin"]["puppeth_dir"].as_str().unwrap()).unwrap(),
-            data_dir:       PathBuf::from_str(parsed["init"]["nodes_dir"].as_str().unwrap()).unwrap(),
-            node_count:     parsed["init"]["node_count"].as_integer().unwrap() as usize,
-            sealer_count:   parsed["init"]["sealer_count"].as_integer().unwrap() as usize,
+            nodes_dir:      PathBuf::from_str(parsed["node"]["dir"].as_str().unwrap()).unwrap(),
+            node_count:     parsed["node"]["count"].as_integer().unwrap() as usize,
+            sealer_count:   parsed["node"]["sealer_count"].as_integer().unwrap() as usize,
             out:            PathBuf::from_str(parsed["init"]["accounts_dir"].as_str().unwrap()).unwrap(),
         }
     }
@@ -64,7 +55,7 @@ impl NodeInitializer {
     }
 
     fn init_nodes(&self) {
-        let mut genesis_dir = self.data_dir.clone();
+        let mut genesis_dir = self.nodes_dir.clone();
         genesis_dir.push(Path::new(&format!("{}.json", NETWORK)));
         let genesis_dir = genesis_dir.into_os_string().into_string().unwrap();
 
@@ -75,7 +66,7 @@ impl NodeInitializer {
 
     fn init_node(&self, id: usize, genesis_dir: &str) {
         let mut geth = Command::new(&self.geth_dir)
-            .arg(format!("--datadir={}", self.data_dir(id)))
+            .arg(format!("--datadir={}", node_dir(&self.nodes_dir, id)))
             .arg("init")
             .arg(genesis_dir)
             .spawn()
@@ -123,12 +114,12 @@ impl NodeInitializer {
         itr.send_on_prompt(b"");
 
         itr.send_on_prompt(b"");
-        itr.send_on_prompt(b"");
+        itr.send_on_prompt(u64::to_string(&NETWORK_ID).as_bytes());
 
         itr.send_on_prompt(b"2");
         itr.send_on_prompt(b"2");
 
-        let genesis_path = self.data_dir.clone().into_os_string().into_string().unwrap();
+        let genesis_path = self.nodes_dir.clone().into_os_string().into_string().unwrap();
         itr.send_on_prompt(genesis_path.as_bytes());
 
         itr.send_on_prompt(b"");
@@ -142,19 +133,14 @@ impl NodeInitializer {
             let account = self.create_account(i);
             accounts.push(account);
         }
-        let accounts_des = toml::to_string(&accounts).unwrap();
-        let mut accounts_file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open(&self.out)
-            .unwrap();
-        accounts_file.write_all(accounts_des.as_bytes()).unwrap();
+        utils::save_addrs(accounts.clone(), &self.out).unwrap();
+
         accounts
     }
 
     fn create_account(&self, id: usize) -> Address {
         let mut geth = Command::new(&self.geth_dir)
-            .arg(format!("--datadir={}", self.data_dir(id)))
+            .arg(format!("--datadir={}", node_dir(&self.nodes_dir, id)))
             .arg("account")
             .arg("new")
             .stdin(Stdio::piped())
@@ -168,12 +154,5 @@ impl NodeInitializer {
         geth_out.read_to_string(&mut res).unwrap();
         let idx = res.find("0x").unwrap() + 2;
         res[idx..(idx+40)].to_string()
-    }
-
-    fn data_dir(&self, id: usize) -> String {
-        let mut data_dir = self.data_dir.clone();
-        let mut subdir = format!("node{}/data", id);
-        data_dir.push(Path::new(&mut subdir));
-        data_dir.into_os_string().into_string().unwrap()
     }
 }

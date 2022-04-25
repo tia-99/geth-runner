@@ -1,14 +1,31 @@
 [bin]
-geth_dir = "C:/Users/25412/go/src/github.com/ethereum/go-ethereum/out/go_build_github_com_ethereum_go_ethereum_cmd_geth2.exe"
+geth_dir = "C:/Users/25412/go/bin/geth.exe"
 puppeth_dir = "C:/Users/25412/go/bin/puppeth.exe"
 
+[node]
+dir = "nodes"
+count = 9
+sealer_count = 4
+connection = [
+    [4,5,6],
+    [4,6,7],
+    [4,7,8],
+    [4,5,8],
+    [0,1,2,3],
+    [0,3],
+    [0,1],
+    [1,2],
+    [2,3]
+]
+# connection = [[]]
+
 [init]
-nodes_dir = "nodes"
 accounts_dir = "nodes/accounts.toml"
-node_count = 3
-sealer_count = 2
 
 [run]
-nodes_dir = "nodes"
-node_count = 3
-connection = [[1, 2], [0, 2], [0, 1]]
+accounts_dir = "nodes/accounts.toml"
+
+[remote]
+ip = "192.168.244.133"
+username = "huxw"
+pw_file = ""

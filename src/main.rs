@@ -3,7 +3,16 @@ mod utils;
 mod run;
 use std::path::PathBuf;
 use clap::{Parser, ArgGroup};
+use std::process::{Command, Stdio};
+use std::io::{self, Read, BufRead, Write};
 use std::str::FromStr;
+
+use utils::*;
+
+const NETWORK: &str = "auto_test";
+const NETWORK_ID: u64 = 666;
+
+type Address = String;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -35,6 +44,20 @@ fn main() {
         let ni = init::NodeInitializer::new_with_cfg_file(cli.config.unwrap().as_path());
         ni.do_init_node();
     } else if cli.run {
-        
+        let nr = run::NodeRunner::new_with_cfg_file(cli.config.unwrap().as_path());
+        nr.do_run_nodes();
     }
+    // let mut remote = Command::new("ssh")
+    //     .arg("-T")
+    //     .arg("huxw@192.168.244.133")
+    //     .stdin(Stdio::piped())
+    //     // .stdout(Stdio::piped())
+    //     .spawn()
+    //     .unwrap();
+
+    // let console = Console::<ChildReader, ChildWriter>::from_child(&mut remote, "remote");
+    // let mut itr = ConsoleInteractor::new(console);
+    // itr.send(String::from("cd ~/桌面/SGX/opensgx2/user").as_bytes()).unwrap();
+    // itr.send(b"../opensgx test/core/txpool").unwrap();
+    // remote.wait().unwrap();
 }

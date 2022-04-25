@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["--config=config.toml", "--init"],
+            "args": ["--config=config.toml", "--run"],
             "cwd": "${workspaceFolder}"
         },
         {

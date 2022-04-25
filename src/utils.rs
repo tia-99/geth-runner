@@ -2,6 +2,52 @@ use std::io::{self, Read, BufRead, Write};
 use std::fmt;
 use std::format_args;
 use std::process;
+use std::path::{Path, PathBuf};
+use std::fs::{File, OpenOptions};
+use toml::Value;
+
+use crate::Address;
+
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+struct Accounts {
+    addrs: Vec<Address>,
+}
+
+pub fn save_addrs(addrs: Vec<Address>, path: &Path) -> io::Result<()> {
+    let contents = toml::to_string(
+        &Accounts {
+            addrs,
+        }
+    ).unwrap();
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(path)?;
+    file.write_all(contents.as_bytes())?;
+    Ok(())
+}
+
+pub fn load_addrs(path: &Path) -> io::Result<Vec<Address>> {
+    let mut contents = String::new();
+    let mut file = File::open(path)?;
+    file.read_to_string(&mut contents)?;
+    let accounts: Accounts = toml::from_str(&contents).unwrap();
+    Ok(accounts.addrs)
+}
+
+pub fn node_dir(nodes_dir: &PathBuf, id: usize) -> String {
+    let mut nodes_dir = nodes_dir.clone();
+    let mut subdir = format!("node{}/data", id);
+    nodes_dir.push(Path::new(&mut subdir));
+    nodes_dir.into_os_string().into_string().unwrap()
+}
+
+pub fn read_toml(path: &Path) -> Value {
+    let mut file = File::open(&path).unwrap();
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).unwrap();
+    contents.parse::<Value>().unwrap()
+}
 
 pub struct Console<T, U>
     where T: Read + BufRead, U: Write
@@ -45,6 +91,14 @@ where T: Read + BufRead, U: Write {
         }
     }
 
+    pub fn _delimeter(&self) -> u8 {
+        self.delimeter
+    }
+
+    pub fn _set_delimeter(&mut self, delimeter: u8) {
+        self.delimeter = delimeter;
+    }
+
     pub fn send(&mut self, msg: &[u8]) -> io::Result<()> {
         self.console.writer.write_all(msg)?;
         self.console.writer.write_all(b"\n")
@@ -62,6 +116,19 @@ where T: Read + BufRead, U: Write {
         self.log(format_args!("receive from console: {}", String::from_utf8(buf).unwrap()));
         self.log(format_args!("send to console: {}", String::from_utf8_lossy(msg)));
         self.send(msg).expect("Send message failed");
+    }
+
+    pub fn send_with_resp(&mut self, msg: &[u8]) -> String {
+        self.log(format_args!("send to console: {}", String::from_utf8_lossy(msg)));
+        self.send(msg).expect("Send message failed");
+        let mut buf = Vec::new();
+        self.recv(&mut buf).expect("Read prompt failed");
+        self.log(format_args!("receive from console: {}", String::from_utf8(buf.clone()).unwrap()));
+        
+        let resp = String::from_utf8(buf).expect("Received invalid utf-8 string from console");
+        let resp = String::from(resp.trim_matches(|ch: char| ch.is_whitespace() || ch == '\"'));
+
+        resp
     }
 
     fn log(&self, args: fmt::Arguments) {
