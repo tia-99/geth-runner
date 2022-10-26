@@ -3,6 +3,10 @@ use std::str::FromStr;
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use std::process::{self, Command, Stdio};
+use std::thread;
+use std::time;
+use rand::Rng;
+use std::fs::{self, OpenOptions};
 
 use crate::utils::{self, Console, ConsoleInteractor, ChildReader, ChildWriter, node_dir};
 use crate::NETWORK_ID;
@@ -15,6 +19,11 @@ struct Node {
     enode:      Option<String>,
 }
 
+struct TestConfig {
+    n:          usize,
+    time_limit: time::Duration,
+}
+
 pub struct NodeRunner {
     geth_dir:       PathBuf,
     nodes_dir:      PathBuf,
@@ -22,11 +31,29 @@ pub struct NodeRunner {
     nodes:          Vec<Rc<RefCell<Node>>>,
     node_count:     usize,
     sealer_count:   usize,
+    tr:             Option<TEERunner>,
+    tf:             Option<TestConfig>,
 
     childs:         Vec<process::Child>,
 }
 
 impl NodeRunner {
+    fn sample(k: i32, n: i32, cur: i32) -> Vec<i32> {
+        if k > n {
+            panic!("sample: k>n");
+        }
+        let mut rng = rand::thread_rng();
+        let mut pool: Vec<i32> = (0..cur).chain(cur+1..n).collect();
+        let k = k as usize;
+        for i in k..pool.len() {
+            let r = rng.gen_range(0..=i);
+            if r < k {
+                pool[r] = pool[i];
+            }
+        }
+        pool[..k].to_vec()
+    }
+
     pub fn new_with_cfg_file(path: &Path) -> NodeRunner {
         let parsed = utils::read_toml(path);
         let mut nr = NodeRunner {
@@ -36,8 +63,10 @@ impl NodeRunner {
             nodes:          Vec::new(),
             node_count:     parsed["node"]["count"].as_integer().unwrap() as usize,
             sealer_count:   parsed["node"]["sealer_count"].as_integer().unwrap() as usize,
+            tr:             None,
+            tf:             None,
 
-            childs:          Vec::new(),
+            childs:         Vec::new(),
         };
         nr.nodes.reserve(nr.node_count);
         let addrs = utils::load_addrs(&nr.accounts_dir).unwrap();
@@ -52,13 +81,47 @@ impl NodeRunner {
                 }
             )));
         }
-        let conn = parsed["node"]["connection"].as_array().unwrap();
-        for i in 0..nr.node_count {
-            let peers = conn[i].as_array().unwrap();
-            for p in peers {
-                let pid = p.as_integer().unwrap() as usize;
-                nr.nodes[i].borrow_mut().peers.push(
-                    Rc::downgrade(&nr.nodes[pid])
+        let mut random_conn = false;
+        if let Some(rc) = parsed["node"].get("random_connect") {
+            random_conn = rc.as_bool().unwrap();
+        }
+        if random_conn {
+            let peer_count = parsed["node"]["peer_count"].as_integer().unwrap();
+            for i in 0..nr.nodes.len() {
+                let pids = Self::sample(peer_count as i32, nr.node_count as i32, i as i32);
+                for pid in pids {
+                    nr.nodes[i].borrow_mut().peers.push(
+                        Rc::downgrade(&nr.nodes[pid as usize])
+                    );
+                }
+            }
+        } else {
+            let conn = parsed["node"]["connection"].as_array().unwrap();
+            for i in 0..nr.node_count {
+                let peers = conn[i].as_array().unwrap();
+                for p in peers {
+                    let pid = p.as_integer().unwrap() as usize;
+                    nr.nodes[i].borrow_mut().peers.push(
+                        Rc::downgrade(&nr.nodes[pid])
+                    );
+                }
+            }
+        }
+        if let Some(tee) = parsed["run"].get("tee") {
+            let tee = tee.as_bool().unwrap();
+            if tee {
+                nr.tr = Some(TEERunner::new_with_cfg_file(path));
+            }
+        }
+
+        if let Some(value) = parsed["test"].get("test") {
+            let test = value.as_bool().unwrap();
+            if test {
+                nr.tf = Some(
+                    TestConfig {
+                        n:          parsed["test"]["n"].as_integer().unwrap() as usize,
+                        time_limit: time::Duration::from_secs(parsed["test"]["period"].as_integer().unwrap() as u64),
+                    }
                 );
             }
         }
@@ -68,12 +131,21 @@ impl NodeRunner {
 
     // consumes the value to avoid multiple calls on this function
     pub fn do_run_nodes(mut self) {
+        if let Some(ref mut tr) = self.tr {
+            tr.do_init_tee();
+        }
         for i in 0..self.nodes.len() {
+            // TODO: tee compatibility
             self.run_node(i);
         }
         self.connect_nodes();
         self.start_mining();
-        loop {}
+        let tf = self.tf.take();
+        if let Some(tf) = tf {
+            self.test_send_txs(tf.n, tf.time_limit);
+        } else {
+            loop {}
+        }
     }
 
     fn start_mining(&mut self) {
@@ -104,6 +176,11 @@ impl NodeRunner {
     // runs the node and opens its console interactor
     fn run_node(&mut self, ith: usize) {
         let mut node = self.nodes[ith].borrow_mut();
+        // let output = OpenOptions::new()
+        //                 .write(true)
+        //                 .create(true)
+        //                 .open(format!("node{}.txt", ith))
+        //                 .unwrap();
         let mut geth = Command::new(&self.geth_dir)
             .arg(format!("--datadir={}", node_dir(&self.nodes_dir, node.id)))
             .arg(format!("--networkid={}", NETWORK_ID))
@@ -112,8 +189,10 @@ impl NodeRunner {
             .arg(format!("--ipcpath={}", Self::ipc_path(node.id)))
             .arg(format!("--unlock={}", node.address))
             .arg(format!("--password=password"))
+            // .arg(format!("2> out{}.txt", ith))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            // .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         let console = Console::
@@ -140,7 +219,109 @@ impl NodeRunner {
         self.childs.push(geth);
     }
 
+    fn test_send_txs(&mut self, n: usize, time_limit: time::Duration) {
+        let before = self.get_tx_cnt();
+        println!("Transaction counts before sending tx: {:?}", before);
+        let ddl = time::Instant::now() + time_limit;
+        self.send_txs(n, ddl);
+        thread::sleep(ddl - time::Instant::now());
+        let after = self.get_tx_cnt();
+        println!("Transaction counts after sending tx: {:?}", after);
+        let dif: Vec<usize> = (0..self.nodes.len()).map(|i| after[i]-before[i]).collect();
+        println!("Transaction committed for each node: {:?}", dif);
+        println!("Total committed transactions: {}", dif.into_iter().sum::<usize>());
+    }
+
+    fn send_txs(&mut self, n: usize, ddl: time::Instant) {
+        for i in 0..n {
+            if time::Instant::now() >= ddl {
+                break;
+            }
+            for j in 0..self.nodes.len() {
+                self.send_tx(j, (j+1)%self.nodes.len(), i)
+            }
+        }
+    }
+
+    fn get_tx_cnt(&mut self) -> Vec<usize> {
+        let mut res = Vec::with_capacity(self.nodes.len());
+        for node in &mut self.nodes {
+            let mut node = node.borrow_mut();
+            let itr = node.itr.as_mut().unwrap();
+            let cnt = itr.send_with_resp(b"eth.getTransactionCount(eth.accounts[0])");
+            let cnt: usize = str::parse(&cnt).unwrap();
+            res.push(cnt);
+        }
+        res
+    }
+
+    fn send_tx(&mut self, x: usize, y: usize, nonce: usize) {
+        let msg = format!(
+            "eth.sendTransaction({{from:\"{}\", to:\"{}\", nonce: \"{}\", value:web3.toWei(1e+45, \"ether\")}})",
+            self.nodes[x].borrow().address,
+            self.nodes[y].borrow().address,
+            nonce,
+        );
+        let msg = msg.as_bytes();
+        self.nodes[x].borrow_mut().itr.as_mut().unwrap().send_with_resp(msg);
+    }
+
     fn ipc_path(id: usize) -> String {
         format!("geth{}.ipc", id)
+    }
+}
+
+pub struct TEERunner {
+    _node_count:     usize,
+    ip:             String,
+    username:       String,
+    _opensgx_dir:    PathBuf,
+}
+
+impl TEERunner {
+    pub fn new_with_cfg_file(path: &Path) -> TEERunner {
+        let parsed = utils::read_toml(path);
+        TEERunner {
+            _node_count:     parsed["node"]["count"].as_integer().unwrap() as usize,
+            ip:             String::from(parsed["remote"]["ip"].as_str().unwrap()),
+            username:       String::from(parsed["remote"]["username"].as_str().unwrap()),
+            _opensgx_dir:    PathBuf::from(parsed["remote"]["opensgx_dir"].as_str().unwrap()),
+        }
+    }
+
+    pub fn do_init_tee(&self) {
+        let mut _remote = Command::new("ssh")
+            .arg("-T")
+            .arg(format!("{}@{}", self.username, self.ip))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_sample() {
+        const N: i32 = 100000;
+        let mut cnt = [0; 5];
+        for _ in 0..N {
+            let res = super::NodeRunner::sample(3, 5, 0);
+            // println!("{:?}", res);
+            for x in res {
+                cnt[x as usize] += 1;
+            }
+        }
+        println!("{:?}", cnt);
+    }
+
+    #[test]
+    fn test_sample2() {
+        const N: i32 = 100;
+        for _ in 0..N {
+            let res = super::NodeRunner::sample(6, 24, 14);
+            println!("{:?}", res);
+        }
     }
 }

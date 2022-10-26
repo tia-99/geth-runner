@@ -1,11 +1,28 @@
 [bin]
-geth_dir = "C:/Users/25412/go/bin/geth.exe"
+geth_dir = "C:/Users/25412/go/src/github.com/ethereum/go-ethereum/out/go_build_github_com_ethereum_go_ethereum_cmd_geth2.exe"
+# geth_dir = "C:/tmp/go_build_github_com_ethereum_go_ethereum_cmd_geth.exe"
+# geth_dir = "C:/Users/25412/go/bin2/geth.exe"
+# geth_dir = "eth_bins/bin/geth.exe"
 puppeth_dir = "C:/Users/25412/go/bin/puppeth.exe"
+
+[test]
+test = true
+n = 0
+period = 50
 
 [node]
 dir = "nodes"
-count = 9
-sealer_count = 4
+# count = 3
+# sealer_count = 2
+# connection = [
+#     [1, 2],
+#     [0, 2],
+#     [0, 1]
+# ]
+count = 20
+sealer_count = 16
+random_connect = true # When random connection is on, connection is omitted.
+peer_count = 3
 connection = [
     [4,5,6],
     [4,6,7],
@@ -15,17 +32,17 @@ connection = [
     [0,3],
     [0,1],
     [1,2],
-    [2,3]
-]
-# connection = [[]]
+    [2,3],]
+    # [0],    [0],    [0],    [0],    [0],    [0],    [0]]
 
 [init]
 accounts_dir = "nodes/accounts.toml"
 
 [run]
 accounts_dir = "nodes/accounts.toml"
+tee = false
 
 [remote]
 ip = "192.168.244.133"
 username = "huxw"
-pw_file = ""
+opensgx_dir = "/home/huxw/桌面/SGX"

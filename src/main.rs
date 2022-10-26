@@ -44,7 +44,7 @@ fn main() {
         let ni = init::NodeInitializer::new_with_cfg_file(cli.config.unwrap().as_path());
         ni.do_init_node();
     } else if cli.run {
-        let nr = run::NodeRunner::new_with_cfg_file(cli.config.unwrap().as_path());
+        let nr = run::NodeRunner::new_with_cfg_file(cli.config.as_ref().unwrap().as_path());
         nr.do_run_nodes();
     }
     // let mut remote = Command::new("ssh")

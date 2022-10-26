@@ -1,3 +1,6 @@
 /target
 /nodes
 /eth_bins
+*.txt
+/.puppeth
+Cargo.lock
